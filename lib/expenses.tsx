@@ -10,7 +10,10 @@ import {
 } from "react";
 
 import { useAuth } from "./auth";
-import { localDateString } from "./format";
+import { checkBudgetAlerts } from "./budgetAlerts";
+import { formatPln, localDateString } from "./format";
+import { cancelWeeklySummary, scheduleWeeklySummary } from "./notifications";
+import { useSettings } from "./settings";
 import { supabase } from "./supabase";
 import type { Category, Expense } from "../types/database";
 
@@ -109,6 +112,7 @@ const SAVE_ERROR =
 
 export function ExpensesProvider({ children }: { children: ReactNode }) {
   const { session } = useAuth();
+  const { settings } = useSettings();
   const userId = session?.user.id ?? null;
 
   const [categories, setCategories] = useState<Category[]>([]);
@@ -260,13 +264,30 @@ export function ExpensesProvider({ children }: { children: ReactNode }) {
         created_at: new Date().toISOString(),
       };
 
-      setMonthExpenses((current) => [optimistic, ...current]);
+      let spentAfter = amount;
+      setMonthExpenses((current) => {
+        spentAfter =
+          current.reduce(
+            (sum, e) =>
+              e.category_id === categoryId ? sum + Number(e.amount) : sum,
+            0
+          ) + amount;
+        return [optimistic, ...current];
+      });
       setHistory((current) =>
         current.categoryId && current.categoryId !== categoryId
           ? current
           : { ...current, items: [optimistic, ...current.items] }
       );
       setLastAddedAt(Date.now());
+
+      // Alert budżetowy 80%/100% (raz na kategorię+próg+miesiąc).
+      const category = categories.find((c) => c.id === categoryId);
+      if (category && settings) {
+        checkBudgetAlerts({ userId, category, spentAfter, settings }).catch(
+          () => {}
+        );
+      }
 
       const replaceOptimistic = (row: Expense | null) => {
         setMonthExpenses((current) =>
@@ -304,7 +325,7 @@ export function ExpensesProvider({ children }: { children: ReactNode }) {
           }
         });
     },
-    [userId]
+    [userId, categories, settings]
   );
 
   const deleteExpense = useCallback(
@@ -356,14 +377,29 @@ export function ExpensesProvider({ children }: { children: ReactNode }) {
       const apply = (list: Expense[]) =>
         list.map((e) => (e.id === id ? { ...e, ...patch } : e));
 
+      let spentAfter = 0;
       setMonthExpenses((current) => {
         previousMonth = current;
-        return apply(current);
+        const next = apply(current);
+        spentAfter = next.reduce(
+          (sum, e) =>
+            e.category_id === categoryId ? sum + Number(e.amount) : sum,
+          0
+        );
+        return next;
       });
       setHistory((current) => {
         previousHistory = current.items;
         return { ...current, items: apply(current.items) };
       });
+
+      // Edycja też może przekroczyć próg (większa kwota / zmiana kategorii).
+      const category = categories.find((c) => c.id === categoryId);
+      if (category && settings) {
+        checkBudgetAlerts({ userId, category, spentAfter, settings }).catch(
+          () => {}
+        );
+      }
 
       supabase
         .from("expenses")
@@ -387,7 +423,7 @@ export function ExpensesProvider({ children }: { children: ReactNode }) {
           }
         });
     },
-    [userId]
+    [userId, categories, settings]
   );
 
   const getExpenseById = useCallback(
@@ -399,9 +435,14 @@ export function ExpensesProvider({ children }: { children: ReactNode }) {
 
   const clearSaveError = useCallback(() => setSaveErrorMessage(null), []);
 
-  const { totalLimit, spentThisMonth, spentToday, spentByCategory } =
+  const { totalLimit, spentThisMonth, spentToday, spentThisWeek, spentByCategory } =
     useMemo(() => {
       const today = localDateString();
+      // Początek tygodnia: poniedziałek.
+      const now = new Date();
+      const monday = new Date(now);
+      monday.setDate(now.getDate() - ((now.getDay() + 6) % 7));
+      const mondayString = localDateString(monday);
       const byCategory: Record<string, number> = {};
       for (const expense of monthExpenses) {
         byCategory[expense.category_id] =
@@ -421,9 +462,37 @@ export function ExpensesProvider({ children }: { children: ReactNode }) {
             expense.date === today ? sum + Number(expense.amount) : sum,
           0
         ),
+        spentThisWeek: monthExpenses.reduce(
+          (sum, expense) =>
+            expense.date >= mondayString ? sum + Number(expense.amount) : sum,
+          0
+        ),
         spentByCategory: byCategory,
       };
     }, [categories, monthExpenses]);
+
+  // Cotygodniowe podsumowanie (niedziela 19:00) — treść lokalnego
+  // powiadomienia jest stała, więc odświeżamy je po każdej zmianie danych.
+  const weeklyEnabled = settings?.weekly_summary_enabled ?? false;
+  useEffect(() => {
+    if (!userId || !settings || isLoading) {
+      return;
+    }
+    if (!weeklyEnabled) {
+      cancelWeeklySummary();
+      return;
+    }
+
+    const remaining = totalLimit - spentThisMonth;
+    const timer = setTimeout(() => {
+      scheduleWeeklySummary(
+        "BudgetTrack — podsumowanie tygodnia",
+        `W tym tygodniu wydałeś ${formatPln(spentThisWeek)}. Zostało Ci ${formatPln(remaining)} do końca miesiąca.`
+      );
+    }, 400);
+
+    return () => clearTimeout(timer);
+  }, [userId, settings, isLoading, weeklyEnabled, spentThisWeek, totalLimit, spentThisMonth]);
 
   return (
     <ExpensesContext.Provider

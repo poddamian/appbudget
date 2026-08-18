@@ -1,8 +1,11 @@
 import { Ionicons } from "@expo/vector-icons";
 import { Tabs } from "expo-router";
 
+import { NotificationPrompt } from "../../components/NotificationPrompt";
+
 export default function TabsLayout() {
   return (
+    <>
     <Tabs
       screenOptions={{
         tabBarActiveTintColor: "#16a34a",
@@ -37,5 +40,7 @@ export default function TabsLayout() {
         }}
       />
     </Tabs>
+    <NotificationPrompt />
+    </>
   );
 }

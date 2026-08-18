@@ -1,10 +1,13 @@
 import { Stack } from "expo-router";
 import { StatusBar } from "expo-status-bar";
+import { useEffect } from "react";
 import { ActivityIndicator, View } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 
 import { AuthProvider, useAuth } from "../lib/auth";
 import { ExpensesProvider } from "../lib/expenses";
+import { configureNotifications } from "../lib/notifications";
+import { SettingsProvider } from "../lib/settings";
 
 import "../global.css";
 
@@ -42,13 +45,19 @@ function RootNavigator() {
 }
 
 export default function RootLayout() {
+  useEffect(() => {
+    configureNotifications();
+  }, []);
+
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <AuthProvider>
-        <ExpensesProvider>
-          <RootNavigator />
-          <StatusBar style="auto" />
-        </ExpensesProvider>
+        <SettingsProvider>
+          <ExpensesProvider>
+            <RootNavigator />
+            <StatusBar style="auto" />
+          </ExpensesProvider>
+        </SettingsProvider>
       </AuthProvider>
     </GestureHandlerRootView>
   );
