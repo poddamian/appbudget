@@ -1,6 +1,6 @@
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
-import { useRouter } from "expo-router";
+import { useLocalSearchParams, useRouter } from "expo-router";
 import { useState } from "react";
 import {
   KeyboardAvoidingView,
@@ -18,14 +18,22 @@ import { parseAmount } from "../lib/format";
 
 export default function AddExpenseScreen() {
   const router = useRouter();
-  const { categories, addExpense } = useExpenses();
+  const { expenseId } = useLocalSearchParams<{ expenseId?: string }>();
+  const { categories, addExpense, updateExpense, getExpenseById } =
+    useExpenses();
 
-  const [amount, setAmount] = useState("");
-  const [selectedCategoryId, setSelectedCategoryId] = useState<string | null>(
-    null
+  // Tryb edycji: ten sam modal, wypełniony danymi istniejącego wydatku.
+  const editedExpense = expenseId ? getExpenseById(expenseId) : undefined;
+  const isEditing = !!editedExpense;
+
+  const [amount, setAmount] = useState(
+    editedExpense ? String(editedExpense.amount).replace(".", ",") : ""
   );
-  const [note, setNote] = useState("");
-  const [isNoteVisible, setIsNoteVisible] = useState(false);
+  const [selectedCategoryId, setSelectedCategoryId] = useState<string | null>(
+    editedExpense?.category_id ?? null
+  );
+  const [note, setNote] = useState(editedExpense?.note ?? "");
+  const [isNoteVisible, setIsNoteVisible] = useState(!!editedExpense?.note);
 
   const parsedAmount = parseAmount(amount);
   const canSave =
@@ -37,7 +45,19 @@ export default function AddExpenseScreen() {
     }
 
     // Optymistycznie: modal zamyka się od razu, zapis leci w tle.
-    addExpense({ categoryId: selectedCategoryId, amount: parsedAmount, note });
+    if (isEditing && editedExpense) {
+      updateExpense(editedExpense.id, {
+        categoryId: selectedCategoryId,
+        amount: parsedAmount,
+        note,
+      });
+    } else {
+      addExpense({
+        categoryId: selectedCategoryId,
+        amount: parsedAmount,
+        note,
+      });
+    }
 
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(
       () => {}
@@ -51,7 +71,9 @@ export default function AddExpenseScreen() {
       behavior={Platform.OS === "ios" ? "padding" : undefined}
     >
       <View className="flex-row items-center justify-between px-5 pt-4">
-        <Text className="text-lg font-semibold text-gray-900">Nowy wydatek</Text>
+        <Text className="text-lg font-semibold text-gray-900">
+          {isEditing ? "Edytuj wydatek" : "Nowy wydatek"}
+        </Text>
         <Pressable
           onPress={() => router.back()}
           className="h-9 w-9 items-center justify-center rounded-full bg-gray-100 active:bg-gray-200"

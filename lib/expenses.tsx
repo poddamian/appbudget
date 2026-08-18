@@ -4,6 +4,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -13,10 +14,35 @@ import { localDateString } from "./format";
 import { supabase } from "./supabase";
 import type { Category, Expense } from "../types/database";
 
+const HISTORY_PAGE_SIZE = 50;
+
 type AddExpenseInput = {
   categoryId: string;
   amount: number;
   note?: string;
+};
+
+type UpdateExpenseInput = {
+  categoryId: string;
+  amount: number;
+  note?: string;
+};
+
+type HistoryState = {
+  items: Expense[];
+  hasMore: boolean;
+  /** ładowanie pierwszej strony (także po zmianie filtra) */
+  isLoading: boolean;
+  isLoadingMore: boolean;
+  categoryId: string | null;
+};
+
+const INITIAL_HISTORY: HistoryState = {
+  items: [],
+  hasMore: true,
+  isLoading: true,
+  isLoadingMore: false,
+  categoryId: null,
 };
 
 type ExpensesContextValue = {
@@ -27,6 +53,8 @@ type ExpensesContextValue = {
   totalLimit: number;
   spentThisMonth: number;
   spentToday: number;
+  /** suma wydatków bieżącego miesiąca per kategoria */
+  spentByCategory: Record<string, number>;
   /** timestamp ostatniego udanego dodania — do animacji potwierdzenia */
   lastAddedAt: number | null;
   /** komunikat po nieudanym zapisie w tle (optimistic rollback) */
@@ -36,8 +64,18 @@ type ExpensesContextValue = {
   addExpense: (input: AddExpenseInput) => void;
   /** ponowne pobranie kategorii i wydatków (pull-to-refresh) */
   refresh: () => Promise<void>;
-  /** suma wydatków bieżącego miesiąca per kategoria */
-  spentByCategory: Record<string, number>;
+  /** paginowana historia wszystkich wydatków (strony po 50) */
+  history: HistoryState;
+  /** zmienia filtr kategorii historii i ładuje pierwszą stronę */
+  setHistoryFilter: (categoryId: string | null) => void;
+  /** dociąga kolejną stronę historii */
+  loadMoreHistory: () => void;
+  /** usuwa wydatek optymistycznie */
+  deleteExpense: (id: string) => void;
+  /** edytuje wydatek optymistycznie */
+  updateExpense: (id: string, input: UpdateExpenseInput) => void;
+  /** znajduje wydatek po id (historia lub bieżący miesiąc) */
+  getExpenseById: (id: string) => Expense | undefined;
 };
 
 const ExpensesContext = createContext<ExpensesContextValue>({
@@ -47,18 +85,27 @@ const ExpensesContext = createContext<ExpensesContextValue>({
   totalLimit: 0,
   spentThisMonth: 0,
   spentToday: 0,
+  spentByCategory: {},
   lastAddedAt: null,
   saveErrorMessage: null,
   clearSaveError: () => {},
   addExpense: () => {},
   refresh: async () => {},
-  spentByCategory: {},
+  history: INITIAL_HISTORY,
+  setHistoryFilter: () => {},
+  loadMoreHistory: () => {},
+  deleteExpense: () => {},
+  updateExpense: () => {},
+  getExpenseById: () => undefined,
 });
 
 const firstOfMonthString = (): string => {
   const now = new Date();
   return localDateString(new Date(now.getFullYear(), now.getMonth(), 1));
 };
+
+const SAVE_ERROR =
+  "Nie udało się zapisać zmian. Sprawdź połączenie i spróbuj ponownie.";
 
 export function ExpensesProvider({ children }: { children: ReactNode }) {
   const { session } = useAuth();
@@ -69,6 +116,11 @@ export function ExpensesProvider({ children }: { children: ReactNode }) {
   const [isLoading, setIsLoading] = useState(true);
   const [lastAddedAt, setLastAddedAt] = useState<number | null>(null);
   const [saveErrorMessage, setSaveErrorMessage] = useState<string | null>(null);
+  const [history, setHistory] = useState<HistoryState>(INITIAL_HISTORY);
+
+  // Chroni przed zapisaniem wyników nieaktualnego zapytania historii
+  // (np. szybka zmiana filtra).
+  const historyRequestId = useRef(0);
 
   const fetchAll = useCallback(async () => {
     if (!userId) {
@@ -98,11 +150,96 @@ export function ExpensesProvider({ children }: { children: ReactNode }) {
       setCategories([]);
       setMonthExpenses([]);
       setIsLoading(true);
+      setHistory(INITIAL_HISTORY);
       return;
     }
 
     fetchAll();
   }, [userId, fetchAll]);
+
+  const fetchHistoryPage = useCallback(
+    async (categoryId: string | null, offset: number) => {
+      let query = supabase
+        .from("expenses")
+        .select("*")
+        .order("date", { ascending: false })
+        .order("created_at", { ascending: false })
+        .range(offset, offset + HISTORY_PAGE_SIZE - 1);
+
+      if (categoryId) {
+        query = query.eq("category_id", categoryId);
+      }
+
+      return query;
+    },
+    []
+  );
+
+  const setHistoryFilter = useCallback(
+    (categoryId: string | null) => {
+      if (!userId) {
+        return;
+      }
+
+      const requestId = ++historyRequestId.current;
+      setHistory({
+        items: [],
+        hasMore: true,
+        isLoading: true,
+        isLoadingMore: false,
+        categoryId,
+      });
+
+      fetchHistoryPage(categoryId, 0).then(({ data, error }) => {
+        if (historyRequestId.current !== requestId) {
+          return;
+        }
+        setHistory((current) => ({
+          ...current,
+          items: error ? [] : data,
+          hasMore: !error && data.length === HISTORY_PAGE_SIZE,
+          isLoading: false,
+        }));
+      });
+    },
+    [userId, fetchHistoryPage]
+  );
+
+  const loadMoreHistory = useCallback(() => {
+    setHistory((current) => {
+      if (current.isLoading || current.isLoadingMore || !current.hasMore) {
+        return current;
+      }
+
+      const requestId = historyRequestId.current;
+      const offset = current.items.filter(
+        (item) => !item.id.startsWith("temp-")
+      ).length;
+
+      fetchHistoryPage(current.categoryId, offset).then(({ data, error }) => {
+        if (historyRequestId.current !== requestId) {
+          return;
+        }
+        setHistory((next) => {
+          if (error) {
+            return { ...next, isLoadingMore: false };
+          }
+          const known = new Set(next.items.map((item) => item.id));
+          return {
+            ...next,
+            items: [
+              ...next.items,
+              ...data.filter((item) => !known.has(item.id)),
+            ],
+            hasMore: data.length === HISTORY_PAGE_SIZE,
+            isLoadingMore: false,
+          };
+        });
+      });
+
+      return { ...current, isLoadingMore: true };
+    });
+  }, [fetchHistoryPage]);
 
   const addExpense = useCallback(
     ({ categoryId, amount, note }: AddExpenseInput) => {
@@ -124,7 +261,26 @@ export function ExpensesProvider({ children }: { children: ReactNode }) {
       };
 
       setMonthExpenses((current) => [optimistic, ...current]);
+      setHistory((current) =>
+        current.categoryId && current.categoryId !== categoryId
+          ? current
+          : { ...current, items: [optimistic, ...current.items] }
+      );
       setLastAddedAt(Date.now());
+
+      const replaceOptimistic = (row: Expense | null) => {
+        setMonthExpenses((current) =>
+          row
+            ? current.map((e) => (e.id === tempId ? row : e))
+            : current.filter((e) => e.id !== tempId)
+        );
+        setHistory((current) => ({
+          ...current,
+          items: row
+            ? current.items.map((e) => (e.id === tempId ? row : e))
+            : current.items.filter((e) => e.id !== tempId),
+        }));
+      };
 
       supabase
         .from("expenses")
@@ -139,21 +295,106 @@ export function ExpensesProvider({ children }: { children: ReactNode }) {
         .single()
         .then(({ data, error }) => {
           if (error || !data) {
-            // Rollback wpisu optymistycznego.
-            setMonthExpenses((current) =>
-              current.filter((expense) => expense.id !== tempId)
-            );
+            replaceOptimistic(null);
             setSaveErrorMessage(
               "Nie udało się zapisać wydatku. Sprawdź połączenie i spróbuj ponownie."
             );
           } else {
-            setMonthExpenses((current) =>
-              current.map((expense) => (expense.id === tempId ? data : expense))
-            );
+            replaceOptimistic(data);
           }
         });
     },
     [userId]
+  );
+
+  const deleteExpense = useCallback(
+    (id: string) => {
+      if (!userId || id.startsWith("temp-")) {
+        return;
+      }
+
+      let removedMonth: Expense[] = [];
+      let removedHistory: Expense[] = [];
+      setMonthExpenses((current) => {
+        removedMonth = current;
+        return current.filter((e) => e.id !== id);
+      });
+      setHistory((current) => {
+        removedHistory = current.items;
+        return { ...current, items: current.items.filter((e) => e.id !== id) };
+      });
+
+      supabase
+        .from("expenses")
+        .delete()
+        .eq("id", id)
+        .then(({ error }) => {
+          if (error) {
+            setMonthExpenses(removedMonth);
+            setHistory((current) => ({ ...current, items: removedHistory }));
+            setSaveErrorMessage(SAVE_ERROR);
+          }
+        });
+    },
+    [userId]
+  );
+
+  const updateExpense = useCallback(
+    (id: string, { categoryId, amount, note }: UpdateExpenseInput) => {
+      if (!userId || id.startsWith("temp-")) {
+        return;
+      }
+
+      const patch = {
+        category_id: categoryId,
+        amount,
+        note: note?.trim() ? note.trim() : null,
+      };
+
+      let previousMonth: Expense[] = [];
+      let previousHistory: Expense[] = [];
+      const apply = (list: Expense[]) =>
+        list.map((e) => (e.id === id ? { ...e, ...patch } : e));
+
+      setMonthExpenses((current) => {
+        previousMonth = current;
+        return apply(current);
+      });
+      setHistory((current) => {
+        previousHistory = current.items;
+        return { ...current, items: apply(current.items) };
+      });
+
+      supabase
+        .from("expenses")
+        .update(patch)
+        .eq("id", id)
+        .select()
+        .single()
+        .then(({ data, error }) => {
+          if (error || !data) {
+            setMonthExpenses(previousMonth);
+            setHistory((current) => ({ ...current, items: previousHistory }));
+            setSaveErrorMessage(SAVE_ERROR);
+          } else {
+            setMonthExpenses((current) =>
+              current.map((e) => (e.id === id ? data : e))
+            );
+            setHistory((current) => ({
+              ...current,
+              items: current.items.map((e) => (e.id === id ? data : e)),
+            }));
+          }
+        });
+    },
+    [userId]
+  );
+
+  const getExpenseById = useCallback(
+    (id: string) =>
+      history.items.find((e) => e.id === id) ??
+      monthExpenses.find((e) => e.id === id),
+    [history.items, monthExpenses]
   );
 
   const clearSaveError = useCallback(() => setSaveErrorMessage(null), []);
@@ -193,12 +434,18 @@ export function ExpensesProvider({ children }: { children: ReactNode }) {
         totalLimit,
         spentThisMonth,
         spentToday,
+        spentByCategory,
         lastAddedAt,
         saveErrorMessage,
         clearSaveError,
         addExpense,
         refresh: fetchAll,
-        spentByCategory,
+        history,
+        setHistoryFilter,
+        loadMoreHistory,
+        deleteExpense,
+        updateExpense,
+        getExpenseById,
       }}
     >
       {children}
