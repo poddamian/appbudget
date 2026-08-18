@@ -7,9 +7,10 @@ import { AuthProvider, useAuth } from "../lib/auth";
 import "../global.css";
 
 function RootNavigator() {
-  const { session, isLoading } = useAuth();
+  const { session, isLoading, onboardingCompleted, isOnboardingLoading } =
+    useAuth();
 
-  if (isLoading) {
+  if (isLoading || (session && isOnboardingLoading)) {
     return (
       <View className="flex-1 items-center justify-center bg-white">
         <ActivityIndicator size="large" color="#16a34a" />
@@ -17,12 +18,17 @@ function RootNavigator() {
     );
   }
 
+  const isSignedIn = !!session;
+
   return (
     <Stack screenOptions={{ headerShown: false }}>
-      <Stack.Protected guard={!!session}>
+      <Stack.Protected guard={isSignedIn && onboardingCompleted}>
         <Stack.Screen name="(tabs)" />
       </Stack.Protected>
-      <Stack.Protected guard={!session}>
+      <Stack.Protected guard={isSignedIn && !onboardingCompleted}>
+        <Stack.Screen name="onboarding" />
+      </Stack.Protected>
+      <Stack.Protected guard={!isSignedIn}>
         <Stack.Screen name="login" />
       </Stack.Protected>
     </Stack>
