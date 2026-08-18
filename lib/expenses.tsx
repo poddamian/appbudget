@@ -34,6 +34,10 @@ type ExpensesContextValue = {
   clearSaveError: () => void;
   /** dodaje wydatek optymistycznie i zapisuje w tle */
   addExpense: (input: AddExpenseInput) => void;
+  /** ponowne pobranie kategorii i wydatków (pull-to-refresh) */
+  refresh: () => Promise<void>;
+  /** suma wydatków bieżącego miesiąca per kategoria */
+  spentByCategory: Record<string, number>;
 };
 
 const ExpensesContext = createContext<ExpensesContextValue>({
@@ -47,6 +51,8 @@ const ExpensesContext = createContext<ExpensesContextValue>({
   saveErrorMessage: null,
   clearSaveError: () => {},
   addExpense: () => {},
+  refresh: async () => {},
+  spentByCategory: {},
 });
 
 const firstOfMonthString = (): string => {
@@ -64,6 +70,29 @@ export function ExpensesProvider({ children }: { children: ReactNode }) {
   const [lastAddedAt, setLastAddedAt] = useState<number | null>(null);
   const [saveErrorMessage, setSaveErrorMessage] = useState<string | null>(null);
 
+  const fetchAll = useCallback(async () => {
+    if (!userId) {
+      return;
+    }
+
+    const [categoriesResult, expensesResult] = await Promise.all([
+      supabase.from("categories").select("*").order("sort_order"),
+      supabase
+        .from("expenses")
+        .select("*")
+        .gte("date", firstOfMonthString())
+        .order("created_at", { ascending: false }),
+    ]);
+
+    if (!categoriesResult.error) {
+      setCategories(categoriesResult.data);
+    }
+    if (!expensesResult.error) {
+      setMonthExpenses(expensesResult.data);
+    }
+    setIsLoading(false);
+  }, [userId]);
+
   useEffect(() => {
     if (!userId) {
       setCategories([]);
@@ -72,36 +101,8 @@ export function ExpensesProvider({ children }: { children: ReactNode }) {
       return;
     }
 
-    let cancelled = false;
-
-    const fetchAll = async () => {
-      const [categoriesResult, expensesResult] = await Promise.all([
-        supabase.from("categories").select("*").order("sort_order"),
-        supabase
-          .from("expenses")
-          .select("*")
-          .gte("date", firstOfMonthString())
-          .order("created_at", { ascending: false }),
-      ]);
-
-      if (cancelled) {
-        return;
-      }
-      if (!categoriesResult.error) {
-        setCategories(categoriesResult.data);
-      }
-      if (!expensesResult.error) {
-        setMonthExpenses(expensesResult.data);
-      }
-      setIsLoading(false);
-    };
-
     fetchAll();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [userId]);
+  }, [userId, fetchAll]);
 
   const addExpense = useCallback(
     ({ categoryId, amount, note }: AddExpenseInput) => {
@@ -157,24 +158,31 @@ export function ExpensesProvider({ children }: { children: ReactNode }) {
 
   const clearSaveError = useCallback(() => setSaveErrorMessage(null), []);
 
-  const { totalLimit, spentThisMonth, spentToday } = useMemo(() => {
-    const today = localDateString();
-    return {
-      totalLimit: categories.reduce(
-        (sum, category) => sum + Number(category.monthly_limit),
-        0
-      ),
-      spentThisMonth: monthExpenses.reduce(
-        (sum, expense) => sum + Number(expense.amount),
-        0
-      ),
-      spentToday: monthExpenses.reduce(
-        (sum, expense) =>
-          expense.date === today ? sum + Number(expense.amount) : sum,
-        0
-      ),
-    };
-  }, [categories, monthExpenses]);
+  const { totalLimit, spentThisMonth, spentToday, spentByCategory } =
+    useMemo(() => {
+      const today = localDateString();
+      const byCategory: Record<string, number> = {};
+      for (const expense of monthExpenses) {
+        byCategory[expense.category_id] =
+          (byCategory[expense.category_id] ?? 0) + Number(expense.amount);
+      }
+      return {
+        totalLimit: categories.reduce(
+          (sum, category) => sum + Number(category.monthly_limit),
+          0
+        ),
+        spentThisMonth: monthExpenses.reduce(
+          (sum, expense) => sum + Number(expense.amount),
+          0
+        ),
+        spentToday: monthExpenses.reduce(
+          (sum, expense) =>
+            expense.date === today ? sum + Number(expense.amount) : sum,
+          0
+        ),
+        spentByCategory: byCategory,
+      };
+    }, [categories, monthExpenses]);
 
   return (
     <ExpensesContext.Provider
@@ -189,6 +197,8 @@ export function ExpensesProvider({ children }: { children: ReactNode }) {
         saveErrorMessage,
         clearSaveError,
         addExpense,
+        refresh: fetchAll,
+        spentByCategory,
       }}
     >
       {children}
