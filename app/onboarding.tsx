@@ -12,34 +12,10 @@ import {
 } from "react-native";
 
 import { useAuth } from "../lib/auth";
+import { categoryIcon } from "../lib/categoryIcons";
+import { formatPln, parseAmount } from "../lib/format";
 import { supabase } from "../lib/supabase";
 import type { Category } from "../types/database";
-
-type IoniconName = keyof typeof Ionicons.glyphMap;
-
-// Kategorie w bazie mają nazwy ikon w konwencji lucide —
-// mapujemy je na najbliższe odpowiedniki z Ionicons.
-const ICON_MAP: Record<string, IoniconName> = {
-  utensils: "restaurant",
-  car: "car",
-  home: "home",
-  "gamepad-2": "game-controller",
-  "heart-pulse": "heart",
-  shapes: "shapes",
-};
-
-const categoryIcon = (icon: string): IoniconName => ICON_MAP[icon] ?? "pricetag";
-
-const parseLimit = (value: string): number => {
-  const trimmed = value.trim().replace(",", ".");
-  if (trimmed === "") {
-    return NaN;
-  }
-  return Number(trimmed);
-};
-
-const formatPln = (value: number): string =>
-  `${value.toFixed(2).replace(".", ",")} zł`;
 
 export default function OnboardingScreen() {
   const { session, completeOnboarding } = useAuth();
@@ -92,7 +68,7 @@ export default function OnboardingScreen() {
   const total = useMemo(
     () =>
       categories.reduce((sum, category) => {
-        const parsed = parseLimit(limits[category.id] ?? "");
+        const parsed = parseAmount(limits[category.id] ?? "");
         return sum + (Number.isFinite(parsed) && parsed >= 0 ? parsed : 0);
       }, 0),
     [categories, limits]
@@ -102,7 +78,7 @@ export default function OnboardingScreen() {
     setErrorMessage(null);
 
     const invalid = categories.find((category) => {
-      const parsed = parseLimit(limits[category.id] ?? "");
+      const parsed = parseAmount(limits[category.id] ?? "");
       return !Number.isFinite(parsed) || parsed < 0;
     });
     if (invalid) {
@@ -118,7 +94,7 @@ export default function OnboardingScreen() {
         categories.map((category) =>
           supabase
             .from("categories")
-            .update({ monthly_limit: parseLimit(limits[category.id]) })
+            .update({ monthly_limit: parseAmount(limits[category.id]) })
             .eq("id", category.id)
         )
       );

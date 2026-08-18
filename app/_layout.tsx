@@ -3,6 +3,7 @@ import { StatusBar } from "expo-status-bar";
 import { ActivityIndicator, View } from "react-native";
 
 import { AuthProvider, useAuth } from "../lib/auth";
+import { ExpensesProvider } from "../lib/expenses";
 
 import "../global.css";
 
@@ -24,6 +25,10 @@ function RootNavigator() {
     <Stack screenOptions={{ headerShown: false }}>
       <Stack.Protected guard={isSignedIn && onboardingCompleted}>
         <Stack.Screen name="(tabs)" />
+        <Stack.Screen
+          name="add-expense"
+          options={{ presentation: "modal", gestureEnabled: true }}
+        />
       </Stack.Protected>
       <Stack.Protected guard={isSignedIn && !onboardingCompleted}>
         <Stack.Screen name="onboarding" />
@@ -38,8 +43,10 @@ function RootNavigator() {
 export default function RootLayout() {
   return (
     <AuthProvider>
-      <RootNavigator />
-      <StatusBar style="auto" />
+      <ExpensesProvider>
+        <RootNavigator />
+        <StatusBar style="auto" />
+      </ExpensesProvider>
     </AuthProvider>
   );
 }
