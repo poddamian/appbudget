@@ -1,3 +1,5 @@
+import { Ionicons } from "@expo/vector-icons";
+import { useRouter } from "expo-router";
 import { useState } from "react";
 import {
   ActivityIndicator,
@@ -46,6 +48,7 @@ function ToggleRow({
 }
 
 export default function ProfileScreen() {
+  const router = useRouter();
   const { session } = useAuth();
   const {
     settings,
@@ -82,6 +85,41 @@ export default function ProfileScreen() {
             Zalogowano jako {session.user.email}
           </Text>
         ) : null}
+
+        <Text className="mb-1 mt-8 text-sm font-semibold uppercase text-gray-400">
+          Budżet
+        </Text>
+        <Pressable
+          onPress={() => router.push("/manage-categories")}
+          className="flex-row items-center border-b border-gray-100 py-3.5 active:bg-gray-50"
+          accessibilityLabel="Zarządzaj kategoriami"
+        >
+          <Ionicons name="grid-outline" size={20} color="#16a34a" />
+          <Text className="ml-3 flex-1 text-base font-medium text-gray-900">
+            Zarządzaj kategoriami
+          </Text>
+          <Ionicons name="chevron-forward" size={18} color="#9ca3af" />
+        </Pressable>
+        <Pressable
+          onPress={() => router.push("/premium")}
+          className="flex-row items-center border-b border-gray-100 py-3.5 active:bg-gray-50"
+          accessibilityLabel="BudgetTrack Premium"
+        >
+          <Ionicons name="star-outline" size={20} color="#d97706" />
+          <Text className="ml-3 flex-1 text-base font-medium text-gray-900">
+            BudgetTrack Premium
+          </Text>
+          <Text
+            className={`mr-2 rounded-full px-2.5 py-0.5 text-xs font-semibold ${
+              settings?.is_premium
+                ? "bg-amber-100 text-amber-700"
+                : "bg-gray-100 text-gray-500"
+            }`}
+          >
+            {settings?.is_premium ? "Aktywne" : "Darmowe"}
+          </Text>
+          <Ionicons name="chevron-forward" size={18} color="#9ca3af" />
+        </Pressable>
 
         <Text className="mb-1 mt-8 text-sm font-semibold uppercase text-gray-400">
           Powiadomienia

@@ -1,3 +1,4 @@
+import { Ionicons } from "@expo/vector-icons";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useEffect, useMemo, useState } from "react";
 import {
@@ -12,6 +13,7 @@ import {
 import { ExpenseRow } from "../../components/ExpenseRow";
 import { useExpenses } from "../../lib/expenses";
 import { formatPln, localDateString } from "../../lib/format";
+import { useSettings } from "../../lib/settings";
 import type { Expense } from "../../types/database";
 
 const sectionTitle = (isoDate: string): string => {
@@ -42,6 +44,8 @@ export default function HistoryScreen() {
     loadMoreHistory,
     deleteExpense,
   } = useExpenses();
+  const { settings } = useSettings();
+  const isPremium = settings?.is_premium ?? false;
 
   const [confirmingDeleteId, setConfirmingDeleteId] = useState<string | null>(
     null
@@ -210,6 +214,27 @@ export default function HistoryScreen() {
                 size="small"
                 color="#16a34a"
               />
+            ) : !isPremium && !history.hasMore ? (
+              // Koniec okna 3 miesięcy dla kont darmowych.
+              <View className="mt-4 items-center rounded-2xl border border-amber-200 bg-amber-50 px-5 py-5">
+                <Ionicons name="lock-closed" size={22} color="#d97706" />
+                <Text className="mt-2 text-center text-base font-semibold text-gray-900">
+                  Starsze wydatki są zablokowane
+                </Text>
+                <Text className="mt-1 text-center text-sm text-gray-500">
+                  W darmowym planie widzisz ostatnie 3 miesiące. Pełna
+                  historia jest dostępna w Premium.
+                </Text>
+                <Pressable
+                  onPress={() => router.push("/premium")}
+                  className="mt-3 rounded-xl bg-green-600 px-5 py-2.5 active:bg-green-700"
+                  accessibilityLabel="Odblokuj pełną historię"
+                >
+                  <Text className="text-sm font-semibold text-white">
+                    Odblokuj pełną historię
+                  </Text>
+                </Pressable>
+              </View>
             ) : null
           }
         />

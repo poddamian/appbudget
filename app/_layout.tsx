@@ -33,6 +33,8 @@ function RootNavigator() {
           name="add-expense"
           options={{ presentation: "modal", gestureEnabled: true }}
         />
+        <Stack.Screen name="manage-categories" />
+        <Stack.Screen name="premium" />
       </Stack.Protected>
       <Stack.Protected guard={isSignedIn && !onboardingCompleted}>
         <Stack.Screen name="onboarding" />

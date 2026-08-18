@@ -22,7 +22,8 @@ const defaultSettings = (userId: string): UserSettings => ({
 type ToggleableSetting =
   | "alert_at_80_percent"
   | "alert_at_100_percent"
-  | "weekly_summary_enabled";
+  | "weekly_summary_enabled"
+  | "is_premium";
 
 type SettingsContextValue = {
   settings: UserSettings | null;

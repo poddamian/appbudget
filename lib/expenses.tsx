@@ -79,6 +79,13 @@ type ExpensesContextValue = {
   updateExpense: (id: string, input: UpdateExpenseInput) => void;
   /** znajduje wydatek po id (historia lub bieżący miesiąc) */
   getExpenseById: (id: string) => Expense | undefined;
+  /** dodaje kategorię; zwraca komunikat błędu albo null */
+  addCategory: (name: string, monthlyLimit: number) => Promise<string | null>;
+  /** edytuje nazwę i limit kategorii optymistycznie */
+  updateCategory: (
+    id: string,
+    input: { name: string; monthlyLimit: number }
+  ) => void;
 };
 
 const ExpensesContext = createContext<ExpensesContextValue>({
@@ -100,11 +107,19 @@ const ExpensesContext = createContext<ExpensesContextValue>({
   deleteExpense: () => {},
   updateExpense: () => {},
   getExpenseById: () => undefined,
+  addCategory: async () => null,
+  updateCategory: () => {},
 });
 
 const firstOfMonthString = (): string => {
   const now = new Date();
   return localDateString(new Date(now.getFullYear(), now.getMonth(), 1));
+};
+
+/** Początek okna historii dla kont darmowych: bieżący + 2 poprzednie miesiące. */
+export const freeHistoryCutoffString = (): string => {
+  const now = new Date();
+  return localDateString(new Date(now.getFullYear(), now.getMonth() - 2, 1));
 };
 
 const SAVE_ERROR =
@@ -161,6 +176,8 @@ export function ExpensesProvider({ children }: { children: ReactNode }) {
     fetchAll();
   }, [userId, fetchAll]);
 
+  const isPremium = settings?.is_premium ?? false;
+
   const fetchHistoryPage = useCallback(
     async (categoryId: string | null, offset: number) => {
       let query = supabase
@@ -173,10 +190,14 @@ export function ExpensesProvider({ children }: { children: ReactNode }) {
       if (categoryId) {
         query = query.eq("category_id", categoryId);
       }
+      // Konto darmowe widzi tylko ostatnie 3 miesiące.
+      if (!isPremium) {
+        query = query.gte("date", freeHistoryCutoffString());
+      }
 
       return query;
     },
-    []
+    [isPremium]
   );
 
   const setHistoryFilter = useCallback(
@@ -433,6 +454,65 @@ export function ExpensesProvider({ children }: { children: ReactNode }) {
     [history.items, monthExpenses]
   );
 
+  const addCategory = useCallback(
+    async (name: string, monthlyLimit: number): Promise<string | null> => {
+      if (!userId) {
+        return "Musisz być zalogowany.";
+      }
+
+      const { data, error } = await supabase
+        .from("categories")
+        .insert({
+          user_id: userId,
+          name: name.trim(),
+          icon: "tag",
+          monthly_limit: monthlyLimit,
+          is_default: false,
+          sort_order:
+            categories.reduce((max, c) => Math.max(max, c.sort_order), 0) + 1,
+        })
+        .select()
+        .single();
+
+      if (error || !data) {
+        return "Nie udało się dodać kategorii. Sprawdź połączenie i spróbuj ponownie.";
+      }
+      setCategories((current) => [...current, data]);
+      return null;
+    },
+    [userId, categories]
+  );
+
+  const updateCategory = useCallback(
+    (id: string, { name, monthlyLimit }: { name: string; monthlyLimit: number }) => {
+      if (!userId) {
+        return;
+      }
+
+      let previous: Category[] = [];
+      setCategories((current) => {
+        previous = current;
+        return current.map((c) =>
+          c.id === id
+            ? { ...c, name: name.trim(), monthly_limit: monthlyLimit }
+            : c
+        );
+      });
+
+      supabase
+        .from("categories")
+        .update({ name: name.trim(), monthly_limit: monthlyLimit })
+        .eq("id", id)
+        .then(({ error }) => {
+          if (error) {
+            setCategories(previous);
+            setSaveErrorMessage(SAVE_ERROR);
+          }
+        });
+    },
+    [userId]
+  );
+
   const clearSaveError = useCallback(() => setSaveErrorMessage(null), []);
 
   const { totalLimit, spentThisMonth, spentToday, spentThisWeek, spentByCategory } =
@@ -515,6 +595,8 @@ export function ExpensesProvider({ children }: { children: ReactNode }) {
         deleteExpense,
         updateExpense,
         getExpenseById,
+        addCategory,
+        updateCategory,
       }}
     >
       {children}
